@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sorptivity Pro: Total Input Stability</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eceff1; padding: 20px; color: #333; }
+        .box { background: white; padding: 25px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        h2 { border-bottom: 2px solid #2c3e50; padding-bottom: 10px; color: #2c3e50; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        label { font-weight: bold; font-size: 0.85em; display: block; margin-bottom: 5px; color: #555; }
+        input, button, select { padding: 12px; border-radius: 6px; border: 1px solid #ccc; width: 100%; box-sizing: border-box; font-size: 1em; }
+        button { background: #2c3e50; color: white; cursor: pointer; border: none; transition: 0.2s; font-weight: bold; }
+        button:hover { background: #34495e; transform: translateY(-1px); }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+        .urgent { background: #ff5252 !important; color: white; border-left: 10px solid #b71c1c; }
+        .urgent input { background: white; color: black; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+        th, td { padding: 10px; border: 1px solid #eee; text-align: left; }
+        th { background: #f8f9fa; color: #555; position: sticky; top: 0; z-index: 10; font-size: 0.9em; }
+        .live-clock { font-size: 48px; font-weight: bold; text-align: center; color: #d32f2f; margin: 20px 0; font-family: monospace; }
+        .action-label { padding: 5px 10px; border-radius: 4px; font-size: 0.8em; font-weight: bold; text-transform: uppercase; }
+        .place-action { background: #e67e22; color: white; }
+        .weigh-action { background: #2980b9; color: white; }
+        .setup-table-container { max-height: 400px; overflow-y: auto; margin-top: 20px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+
+<div class="box" id="setupSection">
+    <h2>1. Experiment Setup</h2>
+    <div class="grid">
+        <div style="grid-column: span 2;"><label>Experiment / File Name</label><input type="text" id="expName" value="Sorptivity_Series"></div>
+        <div><label>Start Mix #</label><input type="number" id="startMixNum" value="1"></div>
+        <div><label>Num. Groups</label><input type="number" id="groupCount" value="22"></div>
+        <div><label>Specimens/Group</label><input type="number" id="specimenCount" value="6"></div>
+        <div><label>Gap (Sec)</label><input type="number" id="gapSeconds" value="30"></div>
+        <div><label>Readings</label><input type="number" id="readingCount" value="10"></div>
+        <div style="display:flex; align-items:flex-end;"><button onclick="generateSetupTable()" style="background:#16a085;">GENERATE LIST</button></div>
+    </div>
+    <div id="metaDataEntry" style="display:none;">
+        <div class="setup-table-container"><table id="setupTable"><thead><tr><th>Sample Name</th><th>D1 (mm)</th><th>D2 (mm)</th></tr></thead><tbody id="setupTableBody"></tbody></table></div>
+        <button onclick="proceedToExperiment()" style="margin-top:20px; background:#2c3e50; font-size:1.2em;">START TEST</button>
+    </div>
+</div>
+
+<div class="box" id="monitorBox" style="display:none;">
+    <div class="live-clock" id="clock">00:00:00</div>
+    <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+        <button onclick="exportToCSV()" style="background:#27ae60; flex: 2;">EXPORT PRECISION DATA (.CSV)</button>
+        <button onclick="window.location.reload()" style="background:#7f8c8d; flex: 1;">RESET</button>
+    </div>
+    <p style="font-size: 0.8em; color: #666; text-align: center;">(Table updates are paused while you are typing to ensure stability)</p>
+    <table>
+        <thead><tr><th>Scheduled</th><th>Sample Name</th><th>Task</th><th>Interval</th><th>Weight (g)</th></tr></thead>
+        <tbody id="scheduleBody"></tbody>
+    </table>
+</div>
+
+<script>
+    let masterSchedule = [];
+    let startTime = null;
+    let weightsData = {}; 
+    let realTimeData = {}; 
+    let sampleMeta = {}; 
+    let specimenNames = [];
+    let readingIntervals = [];
+    let isUserTyping = false; // THE LOCK
+    const alpha = "ABCDEFGHIKLMNOPQRSTUVWXYZ";
+
+    function generateSetupTable() {
+        const startMix = parseInt(document.getElementById('startMixNum').value) || 1;
+        const nGroups = parseInt(document.getElementById('groupCount').value);
+        const nSpecs = parseInt(document.getElementById('specimenCount').value);
+        const body = document.getElementById('setupTableBody');
+        body.innerHTML = ''; specimenNames = [];
+        for(let i=0; i < nGroups; i++) {
+            let currentMixLabel = startMix + i;
+            for(let s=0; s < nSpecs; s++) {
+                let name = `Mix ${currentMixLabel}-${alpha[s]}`;
+                specimenNames.push(name);
+                body.innerHTML += `<tr><td><strong>${name}</strong></td><td><input type="number" id="d1_${name}" placeholder="0.0"></td><td><input type="number" id="d2_${name}" placeholder="0.0"></td></tr>`;
+            }
+        }
+        document.getElementById('metaDataEntry').style.display = 'block';
+    }
+
+    function proceedToExperiment() {
+        const gap = parseInt(document.getElementById('gapSeconds').value);
+        const nReadings = parseInt(document.getElementById('readingCount').value);
+        readingIntervals = [];
+        for(let i=1; i<=nReadings; i++) readingIntervals.push(i * i);
+        masterSchedule = [];
+        specimenNames.forEach((name, idx) => {
+            sampleMeta[name] = { v1: document.getElementById(`d1_${name}`).value || 0, v2: document.getElementById(`d2_${name}`).value || 0, actualStart: null, isActivated: false };
+            masterSchedule.push({ timeOffset: idx * gap, name: name, action: "WEIGH DRY & PLACE", reading: "M0 (Dry)" });
+        });
+        document.getElementById('setupSection').style.display = 'none';
+        document.getElementById('monitorBox').style.display = 'block';
+        startTime = Date.now();
+        setInterval(tick, 1000);
+    }
+
+    function finalizeWeight(name, reading, value) {
+        if (!value || value === "") return;
+        const timestamp = Math.floor((Date.now() - startTime) / 1000);
+        weightsData[`${name}_${reading}`] = value;
+        realTimeData[`${name}_${reading}`] = timestamp;
+
+        if (reading === "M0 (Dry)" && !sampleMeta[name].isActivated) {
+            sampleMeta[name].actualStart = timestamp;
+            sampleMeta[name].isActivated = true;
+            readingIntervals.forEach((min, rIdx) => {
+                masterSchedule.push({ timeOffset: timestamp + (min * 60), name: name, action: "WEIGH", reading: `R${rIdx+1} (${min}m)` });
+            });
+            masterSchedule.sort((a, b) => a.timeOffset - b.timeOffset);
+        }
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.closest('#scheduleBody')) {
+            const input = e.target;
+            const name = input.dataset.name;
+            const reading = input.dataset.reading;
+            
+            finalizeWeight(name, reading, input.value);
+            
+            isUserTyping = false; // RELEASE LOCK to allow redraw
+            renderSchedule(Math.floor((Date.now() - startTime) / 1000));
+
+            // Small delay to let redraw finish, then focus next
+            setTimeout(() => {
+                const allInputs = Array.from(document.querySelectorAll('#scheduleBody input'));
+                const currentIndex = allInputs.findIndex(i => i.id === input.id);
+                if (allInputs[currentIndex + 1]) {
+                    allInputs[currentIndex + 1].focus();
+                }
+            }, 50);
+        }
+    });
+
+    // LOCK when user clicks/focuses, RELEASE when they click away
+    document.addEventListener('focusin', (e) => { if(e.target.closest('#scheduleBody')) isUserTyping = true; });
+    document.addEventListener('focusout', (e) => { if(e.target.closest('#scheduleBody')) isUserTyping = false; });
+
+    function tick() {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('clock').innerText = new Date(elapsed * 1000).toISOString().substr(11, 8);
+        if (!isUserTyping) renderSchedule(elapsed);
+    }
+
+    function renderSchedule(elapsed) {
+        const body = document.getElementById('scheduleBody');
+        const nextM0Sample = specimenNames.find(name => !sampleMeta[name].isActivated);
+        
+        let filtered = masterSchedule.filter(item => {
+            const hasValue = !!weightsData[`${item.name}_${item.reading}`];
+            if (item.action === "WEIGH") {
+                return (item.timeOffset < elapsed + 600 && item.timeOffset > elapsed - 30) || (elapsed >= item.timeOffset && !hasValue);
+            }
+            return item.name === nextM0Sample;
+        });
+
+        filtered.sort((a, b) => (a.action !== b.action) ? (a.action === "WEIGH" ? -1 : 1) : (a.timeOffset - b.timeOffset));
+
+        body.innerHTML = '';
+        filtered.forEach(item => {
+            const row = document.createElement('tr');
+            if (elapsed >= item.timeOffset) row.className = 'urgent';
+            const dataKey = `${item.name}_${item.reading}`;
+            row.innerHTML = `<td>${new Date(item.timeOffset * 1000).toISOString().substr(11, 8)}</td><td><strong>${item.name}</strong></td><td><span class="action-label ${(item.reading === "M0 (Dry)") ? "place-action" : "weigh-action"}">${item.action}</span></td><td>${item.reading}</td><td><input type="number" step="0.001" id="input_${dataKey}" data-name="${item.name}" data-reading="${item.reading}" value="${weightsData[dataKey] || ''}" placeholder="0.000"></td>`;
+            body.appendChild(row);
+        });
+    }
+
+    function exportToCSV() {
+        const filename = document.getElementById('expName').value.replace(/[^a-z0-9]/gi, '_');
+        let headers = ["Sample Name", "D1", "D2", "M0 (g)"];
+        readingIntervals.forEach((m, i) => { headers.push(`R${i+1}_Mass(g)`, `R${i+1}_RealTime(s)`); });
+        let csv = headers.join(",") + "\n";
+        specimenNames.forEach(name => {
+            const t0 = sampleMeta[name].actualStart;
+            let row = [name, sampleMeta[name].v1, sampleMeta[name].v2, weightsData[`${name}_M0 (Dry)`] || ""];
+            readingIntervals.forEach((m, i) => {
+                const key = `${name}_R${i+1} (${m}m)`;
+                row.push(weightsData[key] || "", (realTimeData[key] && t0 !== null) ? (realTimeData[key] - t0) : "");
+            });
+            csv += row.join(",") + "\n";
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a'); a.href = window.URL.createObjectURL(blob);
+        a.download = `${filename}.csv`; a.click();
+    }
+</script>
+</body>
+</html>
